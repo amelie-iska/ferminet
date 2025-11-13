@@ -38,6 +38,7 @@ class PsiformerOptions(networks.BaseNetworkOptions):
     mlp_hidden_dims: Tuple of sizes of hidden dimension of the MLP. Note that
       this does not include the final projection to the embedding dimension.
     use_layer_norm: If true, include a layer norm on both attention and MLP.
+    tf32: If true, use TF32-precision matmuls where appropriate.
   """
 
   num_layers: int = 2
@@ -45,6 +46,7 @@ class PsiformerOptions(networks.BaseNetworkOptions):
   heads_dim: int = 64
   mlp_hidden_dims: Tuple[int, ...] = (256,)
   use_layer_norm: bool = False
+  tf32: bool = False
 
 
 def make_layer_norm() ->...:
@@ -68,12 +70,15 @@ def make_layer_norm() ->...:
   return init, apply
 
 
-def make_multi_head_attention(num_heads: int, heads_dim: int) ->...:
+def make_multi_head_attention(num_heads: int,
+                              heads_dim: int,
+                              tf32: bool = False) ->...:
   """FermiNet-style version of MultiHeadAttention."""
+  prec = jax.lax.DotAlgorithmPreset.TF32_TF32_F32 if tf32 else None
 
   # Linear layer plus reshape final dimensions to num_heads, heads_dim.
   def linear_projection(x: jnp.ndarray, weights: jnp.ndarray) -> jnp.ndarray:
-    y = jnp.dot(x, weights)
+    y = jnp.dot(x, weights, precision=prec)
     return y.reshape(*x.shape[:-1], num_heads, heads_dim)
 
   def init(key: chex.PRNGKey,
@@ -123,13 +128,13 @@ def make_multi_head_attention(num_heads: int, heads_dim: int) ->...:
     k = linear_projection(key, params['k_w'])
     v = linear_projection(value, params['v_w'])
 
-    attn_logits = jnp.einsum('...thd,...Thd->...htT', q, k)
+    attn_logits = jnp.einsum('...thd,...Thd->...htT', q, k, precision=prec)
     scale = 1. / np.sqrt(heads_dim)
     attn_logits *= scale
 
     attn_weights = jax.nn.softmax(attn_logits)
 
-    attn = jnp.einsum('...htT,...Thd->...thd', attn_weights, v)
+    attn = jnp.einsum('...htT,...Thd->...thd', attn_weights, v, precision=prec)
 
     # Concatenate attention matrix of all heads into a single vector.
     # Shape [..., q_index_dim, num_heads * heads_dim]
@@ -174,10 +179,11 @@ def make_self_attention_block(num_layers: int,
                               num_heads: int,
                               heads_dim: int,
                               mlp_hidden_dims: Tuple[int, ...],
-                              use_layer_norm: bool = False) ->...:
+                              use_layer_norm: bool = False,
+                              tf32: bool = False) ->...:
   """Create a QKV self-attention block."""
   attention_init, attention_apply = make_multi_head_attention(
-      num_heads, heads_dim)
+      num_heads, heads_dim, tf32)
   if use_layer_norm:
     layer_norm_init, layer_norm_apply = make_layer_norm()
   mlp_init, mlp_apply = make_mlp()
@@ -253,6 +259,7 @@ def make_psiformer_layers(
       heads_dim=options.heads_dim,
       mlp_hidden_dims=options.mlp_hidden_dims,
       use_layer_norm=options.use_layer_norm,
+      tf32=options.tf32,
   )
 
   def init(key: chex.PRNGKey) -> Tuple[int, networks.ParamTree]:
@@ -342,6 +349,7 @@ def make_fermi_net(
     heads_dim: int,
     mlp_hidden_dims: Tuple[int, ...],
     use_layer_norm: bool,
+    tf32: bool,
 ) -> networks.Network:
   """Psiformer with stacked Self Attention layers.
 
@@ -365,6 +373,7 @@ def make_fermi_net(
     heads_dim: Embedding dimension per-head for self-attention.
     mlp_hidden_dims: Tuple of hidden dimensions of the MLP.
     use_layer_norm: If true, use layer_norm on both attention and MLP.
+    tf32: If true, use TF32-precision matmuls where appropriate.
 
   Returns:
     Network object containing init, apply, orbitals, options, where init and
@@ -404,6 +413,7 @@ def make_fermi_net(
       heads_dim=heads_dim,
       mlp_hidden_dims=mlp_hidden_dims,
       use_layer_norm=use_layer_norm,
+      tf32=tf32,
   )  # pytype: disable=wrong-keyword-args
 
   psiformer_layers = make_psiformer_layers(nspins, charges.shape[0], options)

@@ -79,6 +79,7 @@ class PsiformerTest(parameterized.TestCase):
         heads_dim=32,
         mlp_hidden_dims=(64, 128),
         use_layer_norm=True,
+        tf32=False,
     )
 
     key, subkey = jax.random.split(key)
@@ -145,6 +146,7 @@ class PsiformerTest(parameterized.TestCase):
         'heads_dim': 128,
         'mlp_hidden_dims': (64, 32),
         'use_layer_norm': True,
+        'tf32': False,
     }
 
     network = psiformer.make_fermi_net(

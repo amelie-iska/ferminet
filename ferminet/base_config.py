@@ -270,6 +270,7 @@ def default() -> ml_collections.ConfigDict:
               'heads_dim': 64,
               'mlp_hidden_dims': (256,),
               'use_layer_norm': True,
+              'tf32': False,
           },
           # Config common to all architectures.
           'determinants': 16,  # Number of determinants.
